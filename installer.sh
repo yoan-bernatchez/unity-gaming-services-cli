@@ -74,7 +74,6 @@
 # https://support.unity.com/hc/en-us/requests/new?ticket_form_id=360001936712&serviceName=cli
 #
 
-yoan-bernatchez marked this conversation as resolved.
 # GitHub repository metadata
 ORGANIZATION="Unity-Technologies"
 REPO_NAME="unity-gaming-services-cli"
