@@ -16,25 +16,28 @@
 # Usage
 #---------------------------------------------------------------
 #
-# To install the latest version of the UGS CLI, call
+# To install the UGS CLI using this bash script, first get the current installer version
+# and shasum hash from https://services.docs.unity.com/guides/ugs-cli/latest/general/get-started/install-the-cli/
 #
-#     curl -s PLACEHOLDER | bash
+# Then replace <INSTALLER_VERSION> and <SHASUM_HASH> by their respective values and call this command:
+#
+#     curl -sLo i ugscli.unity.com/<INSTALLER_VERSION> && shasum -c <<<"<SHASUM_HASH>  i" && bash i
 #
 # from your command line.
 #
 # To install a specific version of the UGS CLI, you can add a
 # version parameter like so:
 #
-#     curl -s PLACEHOLDER | version=<version> bash
+#     curl -sLo i ugscli.unity.com/<INSTALLER_VERSION> && shasum -c <<<"<SHASUM_HASH>  i" && version=<version> bash
 #
-#     example: curl -s PLACEHOLDER | version=1.0.0-beta.4 bash
+#     example: curl -sLo i ugscli.unity.com/<INSTALLER_VERSION> && shasum -c <<<"<SHASUM_HASH>  i" && version=1.0.0-beta.4 bash
 #
 # To uninstall the UGS CLI:
 #
-#     curl -s PLACEHOLDER | uninstall=true bash
+#     curl -sLo i ugscli.unity.com/<INSTALLER_VERSION> && shasum -c <<<"<SHASUM_HASH>  i" && uninstall=true bash
 #
 #---------------------------------------------------------------
-# Arguments
+# Options
 #---------------------------------------------------------------
 #
 # version=<version>
@@ -47,6 +50,12 @@
 # description: When set to true, it allows you to uninstall the UGS CLI
 # default:     false
 # example:     uninstall=true
+#
+# diagnostics=<bool>
+# description: Set to false to deactivate the sending of
+#              installation diagnostics
+# default:     true
+# example:     diagnostics=false
 #
 #---------------------------------------------------------------
 # Useful Links
@@ -65,6 +74,7 @@
 # https://support.unity.com/hc/en-us/requests/new?ticket_form_id=360001936712&serviceName=cli
 #
 
+yoan-bernatchez marked this conversation as resolved.
 # GitHub repository metadata
 ORGANIZATION="Unity-Technologies"
 REPO_NAME="unity-gaming-services-cli"
@@ -80,34 +90,80 @@ INSTALL_DIRECTORY="/usr/local/bin"
 SUPPORT_URL="https://support.unity.com/hc/en-us/requests/new?ticket_form_id=360001936712&serviceName=cli"
 UGS_EXISTS=$(which ugs)
 
+if [[ $uninstall == "true" ]]
+then
+    INSTALLATION_METHOD="uninstall"
+else
+    INSTALLATION_METHOD="install"
+fi
+
+# Exit when a command returns non-zero exit code
+set -e
+
+send_installation_metrics () {
+if [[ "$telemetry" != false ]]
+then
+    curl -s --location --request POST 'https://cdp.cloud.unity3d.com/v1/events' \
+    --header 'Content-Type: text/plain' \
+    --data-raw "{
+    \"common\": {
+        \"uuid\": \"\"
+    }
+}
+{
+    \"type\": \"ugs.cli.install_metrics.v2\",
+    \"msg\": {
+        \"application_version\": \"$version\",
+        \"operating_system\": \"$OPERATING_SYSTEM\",
+        \"installation_success\": $1,
+        \"installation_method\": \"bash $INSTALLATION_METHOD\",
+        \"installation_message\": \"$2\"
+    }
+}"
+fi
+}
+
+cleanup() {
+    echo -e "$ERROR_TAG Fatal Error."
+    echo -e "$TAB Try again with elevated privileges, or try later."
+    echo -e "$TAB If your problem does not get resolved, open a ticket at $SUPPORT_URL"
+    send_installation_metrics false "bash $INSTALLATION_METHOD" "Fatal Error: $?"
+}
+
+# Upon error, we run cleanup()
+trap cleanup ERR
+
 # This section manages the uninstallation of the CLI when a user specifies
 # uninstall=true in the command line. If all checks pass, we proceed to uninstall the CLI.
 if [[ ! -z $UGS_EXISTS ]]
 then
     NPM_UGS_EXISTS=$(npm list -g ugs > /dev/null 2>&1; echo $?)
 
-    if [[ $uninstall == "true" ]]
+    if [[ $INSTALLATION_METHOD == "uninstall" ]]
     then
         if [[ $NPM_UGS_EXISTS == 0 ]]
         then
             echo -e "$ERROR_TAG Cannot uninstall the UGS CLI."
             echo -e "$TAB Your version of UGS was installed with npm."
             echo -e "$TAB Try uninstalling it using 'npm uninstall -g ugs'."
+            send_installation_metrics false "Must uninstall with npm"
             exit 1
         else
-            echo -e "$INFORMATION_TAG Starting uninstallation"
+            echo -e "$INFORMATION_TAG Starting uninstall"
             echo -e "$TAB Removing binaries..."
             sudo rm $UGS_EXISTS
             echo -e "$TAB Binaries removed."
             echo ""
             echo -e "$SUCCESS_TAG ugs uninstalled"
+            send_installation_metrics true "success"
             exit 0
         fi
     fi
-elif [[ -z $UGS_EXISTS && $uninstall == "true" ]]
+elif [[ -z $UGS_EXISTS && $INSTALLATION_METHOD == "uninstall" ]]
 then
     echo -e "$ERROR_TAG Cannot uninstall the UGS CLI."
     echo -e "$TAB Could not find ugs on your system."
+    send_installation_metrics false "UGS CLI not found"
     exit 1
 fi
 
@@ -116,23 +172,22 @@ if [[ ! -z $UGS_EXISTS ]]
 then
     if [[ $NPM_UGS_EXISTS == 0 ]]
     then
-        echo ""
         echo -e "$ERROR_TAG Cannot install the UGS CLI."
         echo -e "$TAB A version of the UGS CLI already exist and was installed with npm."
         echo -e "$TAB Try uninstalling it using 'npm uninstall -g ugs'."
+        send_installation_metrics false "Already installed with npm"
         exit 1
     else
-        echo ""
         echo -e "$ERROR_TAG Cannot install the UGS CLI."
         echo -e "$TAB The UGS CLI already exists at '$UGS_EXISTS'"
         echo -e "$TAB Remove that version and try again."
+        send_installation_metrics false "Another version of the CLI already exists"
         exit 1
     fi
 fi
 
-# We start gathering basic information to determine the GitHub download link
-echo -e "$INFORMATION_TAG Assembling download link"
-echo -e "$TAB Verifying operating system type..."
+echo -e "$INFORMATION_TAG Installing the UGS CLI"
+echo -e "$TAB Verifying system compatibility..."
 
 # Get operating system type
 OPERATING_SYSTEM=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -143,27 +198,34 @@ then
     OPERATING_SYSTEM="macos"
 fi
 
-echo -e "$TAB Operating system detected: $OPERATING_SYSTEM"
-
 # Verify operating system support
-if [[ $OPERATING_SYSTEM == "macos" || $OPERATING_SYSTEM == "linux" ]]
+if [[ $OPERATING_SYSTEM != "macos" && $OPERATING_SYSTEM != "linux" ]]
 then
-    echo -e "$TAB Your operating system '$OPERATING_SYSTEM' is supported."
-else
     echo ""
     echo -e "$ERROR_TAG Your operating system '$OPERATING_SYSTEM' is not supported."
     echo -e "$TAB Currently supported operating systems for this bash installer are Linux and MacOS"
     echo -e "$TAB If your operating system is Linux or MacOS, open a ticket here:"
     echo -e "$TAB $SUPPORT_URL"
+    send_installation_metrics false "Operating System not supported"
     exit 1
 fi
 
-# Determine the release tag that will be used to fetch the release
+ASSET_NAME="ugs-$OPERATING_SYSTEM-x64"
+
+# Determine the asset download url
 if [[ ! -z $version ]]
 then
     RELEASE_TAG="v$version"
-    echo -e "$TAB Option 'version' specified with value '$version'."
-    echo -e "$TAB Checking if version exists on GitHub..."
+
+    if [[ $RELEASE_TAG =~ v1\.0\.0-beta\.[123] ]]
+    then
+        echo ""
+        echo -e "$ERROR_TAG UGS CLI version $RELEASE_TAG does not support bash installer."
+        echo -e "$TAB Try installing a more recent version of the CLI."
+        send_installation_metrics false "Unsupported CLI version"
+        exit 1
+    fi
+
     response=$(curl -s "https://api.github.com/repos/$ORGANIZATION/$REPO_NAME/releases/tags/$RELEASE_TAG")
 
     if [[ "$response" != *"tag_name"* ]]
@@ -173,44 +235,26 @@ then
         echo -e "$TAB The release version specified does not exist."
         echo -e "$TAB To see a list of all the released versions of the UGS CLI, visit:"
         echo -e "$TAB https://github.com/Unity-Technologies/unity-gaming-services-cli/releases"
+        send_installation_metrics false "Version specified does not exist"
         exit 1
-    else
-        echo -e "$TAB Release version $version exists."
     fi
+
+    GITHUB_API_URL="https://github.com/$ORGANIZATION/$REPO_NAME/releases/download/$RELEASE_TAG/$ASSET_NAME"
 else
-    echo -e "$TAB No 'version' option specified, getting latest version from GitHub..."
-    RELEASE_TAG=$(curl -s "https://api.github.com/repos/$ORGANIZATION/$REPO_NAME/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-    if [[ -z RELEASE_TAG ]]
-    then
-        echo ""
-        echo -e "$ERROR_TAG Could not determine latest release tag"
-        echo -e "$TAB This could be due to network issues, or reaching the api request limit on GitHub."
-        echo -e "$TAB Try again later or file a support ticket if the problem persists:"
-        echo -e "$TAB $SUPPORT_URL"
-        exit 1
-    fi
-
-    echo -e "$TAB Found latest version: $RELEASE_TAG"
+    GITHUB_API_URL="https://github.com/$ORGANIZATION/$REPO_NAME/releases/latest/download/$ASSET_NAME"
 fi
-
-ASSET_NAME="ugs-$OPERATING_SYSTEM-x64"
-GITHUB_API_URL="https://github.com/$ORGANIZATION/$REPO_NAME/releases/download/$RELEASE_TAG/$ASSET_NAME"
-echo -e "$TAB GitHub download link: $GITHUB_API_URL"
 
 # If we reach this point, all checks have passed. We have all the information to download
 # and install the UGS CLI.
 #
 # Download UGS CLI to /usr/local/bin
-echo ""
-echo -e "$INFORMATION_TAG Installing the UGS CLI"
 echo -e "$TAB Downloading binaries to $INSTALL_DIRECTORY..."
 sudo mkdir -p "$INSTALL_DIRECTORY"
 sudo curl -o "$INSTALL_DIRECTORY/ugs" -L --progress-bar $GITHUB_API_URL
 
-# Use chmod +rx on the binaries to mark them as executable
+# Use chmod +x on the binaries to mark them as executable
 echo -e "$TAB Marking binaries as executable..."
-sudo chmod +rx "$INSTALL_DIRECTORY/ugs"
+sudo chmod +x "$INSTALL_DIRECTORY/ugs"
 
 # We're done, nice! All that's left is a check to see if the executable is in PATH
 echo -e "$TAB All done."
@@ -224,6 +268,8 @@ if [[ ! ":$PATH:" == *":$INSTALL_DIRECTORY:"* ]];
 then
     echo -e "$WARNING_TAG UGS CLI was installed correctly, but could not be automatically added to your PATH."
     echo -e "$TAB To be able to call ugs, add $INSTALL_DIRECTORY to your PATH by modifying ~/.profile or ~/.bash_profile, then reopen your command line."
+    send_installation_metrics true "Success, binaries not in PATH"
 else
     echo -e "$TAB To get started, type 'ugs -h'."
+    send_installation_metrics true "Success"
 fi
